@@ -86,7 +86,6 @@ func main() {
 	// calculate the shortest path with breadth first search
 	fmt.Println("calculating shortest path...")
 	path, found := GetShortestPath(graph, source, destination)
-
 	if !found {
 		fmt.Println("Can not find the solution to the maze. Try changing the color values.")
 		return
@@ -216,6 +215,10 @@ BFS:
 				}
 			}
 		}
+	}
+
+	if !found {
+		return nil, found
 	}
 
 	path := []Pixel{}
