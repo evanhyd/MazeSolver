@@ -17,11 +17,15 @@ Good for cheating in online maze puzzle solving competition.
  - Ending pixel has a color of (0,255,0)     -> Green
  - Path   pixel has a color of (255, 0, 0)   -> Red
  - `./mazesolver.com.exe input.png output.gif 5 255,255,255 0,0,0 255,0,0 0,255,0 255,0,0`
- ## input.png (starting from the top left red pixel to the bottom right green pixel)
- ![input.png](https://i.imgur.com/yeqVJWe.png?raw=true)  
+ ## input.png (top left red pixel to bottom right green pixel)
+ ![input.png](https://imgur.com/ujsHviG.png)  
  
  ## output.gif
- ![output.gif](https://i.imgur.com/jF2p2GU.gif?raw=true)
+ ![output.png](https://imgur.com/6QZARvT.gif)  
+ 
+ ## Even bigger?
+ [input.png](https://i.imgur.com/yeqVJWe.png?raw=true)  
+ [output.gif](https://i.imgur.com/jF2p2GU.gif?raw=true)
  
  
  # Side Note  
