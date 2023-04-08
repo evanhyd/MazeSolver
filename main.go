@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/gif"
+	_ "image/jpeg"
 	"image/png"
 	"io"
+	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -20,7 +24,7 @@ type Pixel struct {
 
 // graph node type
 const (
-	SPACE = iota
+	SPACE byte = iota
 	BLOCK
 	SOURCE
 	DESTINATION
@@ -29,43 +33,25 @@ const (
 
 func main() {
 	if len(os.Args) != 9 {
-		fmt.Println("Usage: [input file] [output file] [duration] [space color] [block color] [source color] [destination color] [path color]")
-		fmt.Println("duration: gif animation in seconds")
-		fmt.Println("color: R,G,B from 0 - 255, separated by a comma")
+		fmt.Printf(
+			"Usage: [input file] [output file] [duration] [space color] [block color] [source color] [destination color] [path color]\n" +
+				"duration: gif animation in seconds\n" +
+				"color: R,G,B from 0 - 255, separated by a comma\n")
 		return
 	}
 
-	if !strings.HasSuffix(os.Args[2], ".gif") && !strings.HasSuffix(os.Args[2], ".png") {
-		fmt.Println("Unsupported output format, must be .gif or .png")
-		return
-	}
-
-	inputBytes, err := os.ReadFile(os.Args[1])
+	inputImage, err := GetInputImage(os.Args[1])
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	inputImage, format, err := image.Decode(bytes.NewReader(inputBytes))
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	rgbaImage := inputImage.(*image.NRGBA)
-	fmt.Printf("Input file: %v, format: %v\n", os.Args[1], format)
-
-	outputFile, err := os.Create(os.Args[2])
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer outputFile.Close()
 
 	duration, err := strconv.ParseFloat(os.Args[3], 64)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Printf("GIF frame rate: %v/s\n", duration)
+	fmt.Printf("GIF duration: %v s\n", duration)
 
 	configuredColors := []color.NRGBA{}
 	for i := 4; i < 9; i++ {
@@ -76,28 +62,52 @@ func main() {
 		}
 		configuredColors = append(configuredColors, color)
 	}
-	fmt.Printf("Blank       Color: %+v\nBlock       Color: %+v\nSource      Color: %+v\nDestination Color: %+v\n", configuredColors[0], configuredColors[1], configuredColors[2], configuredColors[3])
+	fmt.Printf("Blank       Color: %+v\nBlock       Color: %+v\nSource      Color: %+v\nDestination Color: %+v\n",
+		configuredColors[SPACE], configuredColors[BLOCK], configuredColors[SOURCE], configuredColors[DESTINATION])
 
-	// parse images into graph
-	fmt.Println("parsing image into graph...")
-	graph, source, destination := ParseToGraph(rgbaImage, configuredColors[0], configuredColors[1], configuredColors[2], configuredColors[3])
-	fmt.Printf("Source     : %+v\nDestination: %+v\n", source, destination)
+	log.Println("parsing image into graph...")
+	graph, source, destination, err := ParseToGraph(inputImage, configuredColors)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	fmt.Printf("Source      %v\nDestination %v\n", source, destination)
 
-	// calculate the shortest path with breadth first search
-	fmt.Println("calculating shortest path...")
+	log.Println("calculating shortest path...")
 	path, found := GetShortestPath(graph, source, destination)
 	if !found {
-		fmt.Println("Can not find the solution to the maze. Try changing the color values.")
+		fmt.Println("Can not find the solution to the maze\nTry changing the color\nDid you mark the source and destination point?")
 		return
 	}
 
-	fmt.Println("generating solution image...")
-	if strings.HasSuffix(os.Args[2], ".gif") {
-		GenerateGIF(outputFile, rgbaImage, path, configuredColors[4], duration)
-	} else {
-		GeneratePNG(outputFile, rgbaImage, path, configuredColors[4])
+	log.Printf("generating %v...\n", os.Args[2])
+	outputFile, err := os.Create(os.Args[2])
+	if err != nil {
+		fmt.Println(err)
+		return
 	}
-	fmt.Printf("%v has been created\n", os.Args[2])
+	if strings.HasSuffix(os.Args[2], ".gif") {
+		GenerateAnimatedImage(outputFile, graph, path, configuredColors, duration)
+	} else {
+		GenerateStaticImage(outputFile, graph, path, configuredColors)
+	}
+	log.Println("Completed")
+}
+
+func GetInputImage(inputPath string) (*image.NRGBA, error) {
+	sourceBytes, err := os.ReadFile(os.Args[1])
+	if err != nil {
+		return nil, err
+	}
+	sourceImage, format, err := image.Decode(bytes.NewReader(sourceBytes))
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("Input file: %v, format: %v\n", os.Args[1], format)
+
+	inputImage := image.NewNRGBA(sourceImage.Bounds())
+	draw.Draw(inputImage, inputImage.Bounds(), sourceImage, sourceImage.Bounds().Min, draw.Src)
+	return inputImage, nil
 }
 
 func RGBStringToColor(rgbString string) (color.NRGBA, error) {
@@ -106,29 +116,22 @@ func RGBStringToColor(rgbString string) (color.NRGBA, error) {
 		return color.NRGBA{}, errors.New("invalid RGB format")
 	}
 
-	r, err := strconv.Atoi(rgb[0])
-	if err != nil {
-		return color.NRGBA{}, err
+	rgbColors := [3]uint8{}
+	for i := range rgbColors {
+		rgbColor, err := strconv.Atoi(rgb[i])
+		if err != nil {
+			return color.NRGBA{}, err
+		}
+		if rgbColor < 0 || rgbColor > 255 {
+			return color.NRGBA{}, errors.New("invalid RGB values")
+		}
+		rgbColors[i] = uint8(rgbColor)
 	}
 
-	g, err := strconv.Atoi(rgb[1])
-	if err != nil {
-		return color.NRGBA{}, err
-	}
-
-	b, err := strconv.Atoi(rgb[2])
-	if err != nil {
-		return color.NRGBA{}, err
-	}
-
-	if r < 0 || g < 0 || b < 0 || r > 255 || g > 255 || b > 255 {
-		return color.NRGBA{}, errors.New("invalid RGB values")
-	}
-
-	return color.NRGBA{uint8(r), uint8(g), uint8(b), 255}, nil
+	return color.NRGBA{rgbColors[0], rgbColors[1], rgbColors[2], 255}, nil
 }
 
-func ParseToGraph(rgbaImage *image.NRGBA, spaceColor, blockColor, sourceColor, destinationColor color.NRGBA) ([][]byte, Pixel, Pixel) {
+func ParseToGraph(inputImage *image.NRGBA, configuredColors []color.NRGBA) ([][]byte, Pixel, Pixel, error) {
 	ColorDistance := func(c1, c2 color.NRGBA) int32 {
 		r := int32(c1.R) - int32(c2.R)
 		g := int32(c1.G) - int32(c2.G)
@@ -136,58 +139,60 @@ func ParseToGraph(rgbaImage *image.NRGBA, spaceColor, blockColor, sourceColor, d
 		return r*r + g*g + b*b
 	}
 
-	GetPixelType := func(pixelColor color.NRGBA) int {
-		shortest := ColorDistance(pixelColor, spaceColor)
-		pixelType := SPACE
-
-		if distance := ColorDistance(pixelColor, blockColor); distance < shortest {
-			shortest = distance
-			pixelType = BLOCK
-		}
-
-		if distance := ColorDistance(pixelColor, sourceColor); distance < shortest {
-			shortest = distance
-			pixelType = SOURCE
-		}
-
-		if distance := ColorDistance(pixelColor, destinationColor); distance < shortest {
-			// shortest = distance
-			pixelType = DESTINATION
-		}
-
-		return pixelType
-	}
-
-	graph := make([][]byte, rgbaImage.Bounds().Dy())
+	graph := make([][]byte, inputImage.Bounds().Dy())
 	for y := range graph {
-		graph[y] = make([]byte, rgbaImage.Bounds().Dx())
+		graph[y] = make([]byte, inputImage.Bounds().Dx())
 	}
 
 	source, destination := Pixel{}, Pixel{}
+	shortestSourceDistance, shortestDestinationDistance := int32(math.MaxInt32), int32(math.MaxInt32)
 
-	for y := 0; y < rgbaImage.Bounds().Dy(); y++ {
-		for x := 0; x < rgbaImage.Bounds().Dx(); x++ {
-			pixelColor := rgbaImage.NRGBAAt(x, y)
-			switch GetPixelType(pixelColor) {
-			case BLOCK:
-				graph[y][x] = BLOCK
-			case SOURCE:
+	for y := 0; y < inputImage.Bounds().Dy(); y++ {
+		for x := 0; x < inputImage.Bounds().Dx(); x++ {
+			pixelColor := inputImage.NRGBAAt(x, y)
+			spaceDistance := ColorDistance(pixelColor, configuredColors[SPACE])
+			blockDistance := ColorDistance(pixelColor, configuredColors[BLOCK])
+			sourceDistance := ColorDistance(pixelColor, configuredColors[SOURCE])
+			destinationDistance := ColorDistance(pixelColor, configuredColors[DESTINATION])
+
+			if sourceDistance < shortestSourceDistance {
+				shortestSourceDistance = sourceDistance
 				source = Pixel{y, x}
-			case DESTINATION:
+			}
+
+			if destinationDistance < shortestDestinationDistance {
+				shortestDestinationDistance = destinationDistance
 				destination = Pixel{y, x}
+			}
+
+			if blockDistance < spaceDistance && blockDistance < sourceDistance && blockDistance < destinationDistance {
+				graph[y][x] = BLOCK
 			}
 		}
 	}
 
-	return graph, source, destination
+	if shortestSourceDistance == math.MaxInt32 {
+		return nil, Pixel{}, Pixel{}, errors.New("can not identify the source point")
+	}
+	if shortestDestinationDistance == math.MaxInt32 {
+		return nil, Pixel{}, Pixel{}, errors.New("can not identify the destination point")
+	}
+
+	graph[source.y][source.x] = SOURCE
+	graph[destination.y][destination.x] = DESTINATION
+
+	return graph, source, destination, nil
 }
 
 func GetShortestPath(graph [][]byte, source, destination Pixel) ([]Pixel, bool) {
-	offsets := []Pixel{{0, 1}, {1, 0}, {0, -1}, {-1, 0}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1}}
+	offsets := [8]Pixel{{0, 1}, {1, 0}, {0, -1}, {-1, 0}, {-1, -1}, {-1, 1}, {1, -1}, {1, 1}}
 
 	parent := make([][]Pixel, len(graph))
 	for y := range parent {
 		parent[y] = make([]Pixel, len(graph[0]))
+		for x := range parent[y] {
+			parent[y][x].y = -1
+		}
 	}
 
 	que := []Pixel{source}
@@ -204,8 +209,7 @@ BFS:
 			x := curr.x + offset.x
 
 			if 0 <= y && y < len(graph) && 0 <= x && x < len(graph[0]) {
-				if graph[y][x] == SPACE {
-					graph[y][x] = BLOCK
+				if graph[y][x] != BLOCK && parent[y][x].y == -1 {
 					parent[y][x] = curr
 					if destination.y == y && destination.x == x {
 						found = true
@@ -237,44 +241,31 @@ BFS:
 	return path, found
 }
 
-func GenerateGIF(outputFile io.Writer, nrgbaImage *image.NRGBA, path []Pixel, pathColor color.NRGBA, duration float64) {
-	GetBasePalletedImage := func(sourceImage *image.NRGBA) *image.Paletted {
-		paletteMap := make(map[color.NRGBA]struct{})
-		baseImage := image.NewPaletted(nrgbaImage.Rect, []color.Color{pathColor})
+func GenerateAnimatedImage(outputFile io.Writer, graph [][]byte, path []Pixel, configuredColors []color.NRGBA, duration float64) {
+	ClonePalettedImage := func(imageToCopy *image.Paletted) *image.Paletted {
+		cloned := image.Paletted{Rect: imageToCopy.Rect, Stride: imageToCopy.Stride, Palette: imageToCopy.Palette}
+		cloned.Pix = make([]uint8, len(imageToCopy.Pix))
+		copy(cloned.Pix, imageToCopy.Pix)
+		return &cloned
+	}
 
-		for y := 0; y < sourceImage.Rect.Dy(); y++ {
-			for x := 0; x < sourceImage.Rect.Dx(); x++ {
-				nrgba := sourceImage.NRGBAAt(x, y)
-				if _, ok := paletteMap[nrgba]; !ok {
-					paletteMap[nrgba] = struct{}{}
-					baseImage.Palette = append(baseImage.Palette, nrgba)
-				}
-				baseImage.Set(x, y, nrgba)
-			}
+	// convert NRGBA image into base gif image
+	baseImage := image.NewPaletted(image.Rect(0, 0, len(graph[0]), len(graph)), color.Palette{})
+	for i := range configuredColors {
+		baseImage.Palette = append(baseImage.Palette, configuredColors[i])
+	}
+	for y := 0; y < baseImage.Rect.Dy(); y++ {
+		for x := 0; x < baseImage.Rect.Dx(); x++ {
+			baseImage.SetColorIndex(x, y, graph[y][x])
 		}
-
-		return baseImage
 	}
 
-	ClonePalettedImage := func(sourceImage *image.Paletted) *image.Paletted {
-		clonedImage := image.Paletted{Rect: sourceImage.Rect, Stride: sourceImage.Stride, Palette: sourceImage.Palette}
-		clonedImage.Pix = make([]uint8, len(sourceImage.Pix))
-		copy(clonedImage.Pix, sourceImage.Pix)
-		return &clonedImage
-	}
-
-	gifImage := gif.GIF{}
-	baseImage := GetBasePalletedImage(nrgbaImage)
-
-	/**
-	x frames / second
-	y frames / 10 ms
-	*/
-	const framesPerSecond = 50
+	const framesPerSecond = 25
 	const delayPerFrame = 1000 / framesPerSecond / 10
 	stepsPerFrame := float64(len(path)) / (framesPerSecond * duration)
 	stepsRemainThisFrame := stepsPerFrame
 
+	gifImage := gif.GIF{}
 	for i := 0; i < len(path); i++ {
 		if stepsRemainThisFrame < 1.0 || i == len(path)-1 {
 			stepsRemainThisFrame += stepsPerFrame
@@ -283,16 +274,22 @@ func GenerateGIF(outputFile io.Writer, nrgbaImage *image.NRGBA, path []Pixel, pa
 			gifImage.Delay = append(gifImage.Delay, delayPerFrame)
 		}
 
-		baseImage.Set(path[i].x, path[i].y, pathColor)
+		baseImage.SetColorIndex(path[i].x, path[i].y, PATH)
 		stepsRemainThisFrame -= 1.0
 	}
 
 	gif.EncodeAll(outputFile, &gifImage)
 }
 
-func GeneratePNG(outputFile io.Writer, nrgbaImage *image.NRGBA, path []Pixel, pathColor color.NRGBA) {
-	for i := range path {
-		nrgbaImage.SetNRGBA(path[i].x, path[i].y, pathColor)
+func GenerateStaticImage(outputFile io.Writer, graph [][]byte, path []Pixel, configuredColors []color.NRGBA) {
+	outputImage := image.NewNRGBA(image.Rect(0, 0, len(graph[0]), len(graph)))
+	for i := range graph {
+		for j := range graph[i] {
+			outputImage.SetNRGBA(j, i, configuredColors[graph[i][j]])
+		}
 	}
-	png.Encode(outputFile, nrgbaImage)
+	for i := range path {
+		outputImage.SetNRGBA(path[i].x, path[i].y, configuredColors[PATH])
+	}
+	png.Encode(outputFile, outputImage)
 }
